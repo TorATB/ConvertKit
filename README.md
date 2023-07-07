@@ -7,6 +7,8 @@ Convert audio files (every audio file that ffmpeg supports) to the following: MP
 Convert images from various raw or normal formats to JPEG, PNG, TIFF, BMP, GIF, ICO.
 You can also rotate video and image files. 
 
+ConvertKit uses "ffmpeg-2023-06-16" and "ImageMagick-6.8.9-8", they are included in this installer.
+
 "How to" guide
 
 ![Help1](https://i.imgur.com/q40daiz.jpg)
