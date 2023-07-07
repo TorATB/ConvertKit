@@ -1,0 +1,965 @@
+<html>
+<head>
+<title>Loading...</title>
+
+<script language="vbscript">
+Height=210
+Width=400
+DPI=getDPI
+if DPI = 120 then
+  Height=Height*1.25
+  Width=Width*1.25
+elseif DPI = 144 then
+  Height=Height*1.5
+  Width=Width*1.5
+end if
+window.resizeTo Width,Height
+screenWidth = Document.ParentWindow.Screen.AvailWidth
+screenHeight = Document.ParentWindow.Screen.AvailHeight
+posLeft = (screenWidth - Width) / 2
+posTop = (screenHeight - Height) / 2
+window.moveTo posLeft, posTop
+
+'Hardware acceleration info:
+'-hwaccel cuda -hwaccel_output_format cuda
+
+Function getDPI
+  on error resume next
+  Set ObjShell=CreateObject("Wscript.Shell")
+  DPI=96
+  REG=ObjShell.RegRead("HKCU\Control Panel\Desktop\WindowMetrics\AppliedDPI")
+  DPI=CKRG(REG,DPI)
+  REG=ObjShell.RegRead("HKCU\Software\Microsoft\Windows\CurrentVersion\ThemeManager\LastLoadedDPI")
+  DPI=CKRG(REG,DPI)
+  REG=ObjShell.RegRead("HKCU\Control Panel\Desktop\LogPixels")
+  DPI=CKRG(REG,DPI)
+  REG=ObjShell.RegRead("HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontDPI\LogPixels")
+  DPI=CKRG(REG,DPI)
+  REG=ObjShell.RegRead("HKU\.DEFAULT\Control Panel\Desktop\WindowMetrics\AppliedDPI")
+  DPI=CKRG(REG,DPI)
+  GetDPI=DPI
+End Function
+
+Function CKRG(REG,DPI)
+  If(cint(REG)>cint(DPI))Then
+    CKRG=REG
+  else
+    CKRG=DPI
+  End If
+End Function
+</script>
+
+<HTA:APPLICATION
+  ID="convHTA"
+  APPLICATIONNAME="Convert Files"
+  SCROLL="NO"
+  SINGLEINSTANCE="yes"
+  border            = "thin"
+  borderStyle        = "normal"
+  caption            = "yes"
+  contextMenu        = "no"
+  maximizeButton    = "no"
+  minimizeButton    = "yes"
+  icon = "ConvertKit.ico"
+>
+</head>
+
+<script language="VBScript">
+dim arrParam, strFileType, AppPath, strDrive, strCmd, AppNameRunning, DocPath, strCounter, bolMergeFiles, strRadio, strDeinterlace, strFfmpegVer, strMediaDuration, strResolution
+
+Sub Window_Onload
+  strParam = convHTA.commandLine
+  AppPath = mid(strParam,2,instrrev(strParam,".hta")-13)
+  strParam = mid(strParam,instrrev(strParam,".hta")+6)
+  strParam = replace(strParam, chr(34), "")
+  strDrive = mid(strParam,1,1)
+  strFfmpegVer = "ffmpeg-2023-06-16"
+  DocPath = CreateObject("Wscript.Shell").SpecialFolders("Mydocuments")
+  if instr(3,strParam,":") = 0 then
+    strFileType = strParam
+  else
+    strFileType = mid(strParam,1,instr(3,strParam,":")-3)
+  end if
+  if strParam <> "" then 'Starting the application with NO parameters
+    strFileType = mid(strFileType,instrrev(strFileType,"."))
+    if strParam <> "" then
+      arrParam = convToArray(strParam)
+    end if
+
+    bolMergeFiles = false
+
+    if isAudio(strFileType) then
+      ShowAudioControls
+      setbolMerge(27)
+
+    elseif isImage(strFileType) then
+      ShowImageControls
+
+    else
+      ShowVideoControls
+      setbolMerge(27)
+
+      calcSize
+      getResolution
+    end if
+    document.title = "Convert Files"
+  else
+    document.GetElementByID("btnStart").disabled = true
+  end if
+
+End Sub
+
+sub getResolution
+  intHeight = checkMediaDuration(arrParam(0), 316)
+  intWidth = checkMediaDuration(arrParam(0), 314)
+  strResolution = intHeight & "x" & intWidth
+  if strResolution = "x" then
+    strCmd = "cmd /c " & chr(34) & chr(34) & AppPath & "\" & strFfmpegVer & "\bin\ffprobe.exe" & chr(34) & _
+    " -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 " & chr(34) & arrParam(0) & _
+    chr(34) & " 1>" & chr(34) & DocPath & "\progress.txt" & chr(34) & " 2>&1" & chr(34)
+    AppNameRunning = "ffprobe.exe"
+    'RUN APPLICATION
+    idProcess = window.setTimeout("ThreadedProcess", 1, "VBScript")
+    idProgress = window.setTimeout("ThreadedProgress", 1, "VBScript")
+    sbWait(1)
+  end if
+end sub
+
+sub setbolMerge (mediaDurationInt)
+  strMediaDuration = checkMediaDuration(arrParam(0), mediaDurationInt)
+  if UBound(arrParam) = 1 then
+    if checkMediaDuration(arrParam(0), mediaDurationInt) = checkMediaDuration(arrParam(1), mediaDurationInt) then
+      'sjekke om duration av begge filene er identiske
+      if (isAudio(arrParam(0)) and isVideo(arrParam(1))=false) OR (isAudio(arrParam(1))=false and isVideo(arrParam(0))) OR _
+        (isAudio(arrParam(0))=false and isVideo(arrParam(1))) OR (isAudio(arrParam(1)) and isVideo(arrParam(0))=false) then
+        ShowVideoControls
+        bolMergeFiles = true
+      end if
+    end if
+  end if
+end sub
+
+function checkMediaDuration(strFilePath, intOsType)
+  strFolder = mid(strFilePath,1,instrrev(strFilePath,"\")-1)
+  strFileName = mid(replace(strFilePath, strFolder, ""),2)
+  Dim oShell  : Set oShell  = CreateObject("Shell.Application")
+  Dim oFolder : Set oFolder = oShell.Namespace(strFolder)
+  Dim oFile   : Set oFile   = oFolder.ParseName(strFileName)
+  checkMediaDuration = oFolder.GetDetailsOf(oFile, intOsType)
+end function
+
+
+function getOsVersion
+  Set dtmConvertedDate = CreateObject("WbemScripting.SWbemDateTime")
+  strComputer = "."
+  Set objWMIService = GetObject("winmgmts:{impersonationLevel=impersonate}!\\" & strComputer & "\root\cimv2")
+  Set oss = objWMIService.ExecQuery ("Select Version from Win32_OperatingSystem")
+  For Each os in oss
+    getOsVersion = os.Version
+  Next
+end function
+
+function removeAfterThis(strInput, strDelimiter)
+  removeAfterThis = mid(strInput,1,instr(strInput,strDelimiter)-len(strDelimiter))
+end function
+
+function isDurationSame(strDur1, strDur2)
+  isDurationSame = false
+
+end function
+
+function isVideo(strFileType2)
+  isVideo = false
+  if isAudio(strFileType2) = false AND isImage(strFileType2) = false then
+    isVideo = true
+  end if
+end function
+
+function isAudio(strFileType2)
+  isAudio = false
+  Select Case lcase(strFileType2)
+  Case ".mp3"
+    isAudio = true
+  Case ".oga"
+    isAudio = true
+  Case ".wav"
+    isAudio = true
+  Case ".flac"
+    isAudio = true
+  Case ".wma"
+    isAudio = true
+  Case ".snd"
+    isAudio = true
+  Case ".cdr"
+    isAudio = true
+  Case ".m4a"
+    isAudio = true
+  Case ".aac"
+    isAudio = true
+  Case ".aif"
+    isAudio = true
+  Case ".aiff"
+    isAudio = true
+  End Select
+end function
+
+function isImage(strFileType2)
+  isImage = false
+  Select Case lcase(strFileType2)
+  Case ".bmp"
+    isImage = true
+  Case ".webp"
+    isImage = true
+  Case ".png"
+    isImage = true
+  Case ".jpg"
+    isImage = true
+  Case ".pdf"
+    isImage = true
+  Case ".oxps"
+    isImage = true
+  Case ".jpeg"
+    isImage = true
+  Case ".gif"
+    isImage = true
+  Case ".tiff"
+    isImage = true
+  Case ".tif"
+    isImage = true
+  Case ".ico"
+    isImage = true
+  Case ".psd"
+    isImage = true
+  End Select
+end function
+
+Sub ShowAudioControls
+  lblFrom.innerhtml = "Convert Audio File"
+  Dim rdo
+  for each rdo in chkRotate
+    rdo.style.visibility="hidden"
+  next
+  imgrleft.style.visibility="hidden"
+  imgflip.style.visibility="hidden"
+  imgfliph.style.visibility="hidden"
+  imgrright.style.visibility="hidden"
+  lblRotate.style.visibility="hidden"
+  dwnRes.style.visibility="hidden"
+  lblPixels.style.visibility="hidden"
+
+  lblDeinterlace.style.visibility="hidden"
+  chkDeinterlace.style.visibility="hidden"
+
+  Set objOption1 = Document.createElement("OPTION")
+  objOption1.Text = ".MP3"
+  objOption1.Value = ".mp3"
+  dwnType.Add(objOption1)
+
+  Set objOption2 = Document.createElement("OPTION")
+  objOption2.Text = ".WAV"
+  objOption2.Value = ".wav"
+  dwnType.Add(objOption2)
+
+  Set objOption3 = Document.createElement("OPTION")
+  objOption3.Text = ".FLAC"
+  objOption3.Value = ".flac"
+  dwnType.Add(objOption3)
+
+  Set objOption4 = Document.createElement("OPTION")
+  objOption4.Text = ".WMA"
+  objOption4.Value = ".wma"
+  dwnType.Add(objOption4)
+
+  Set objOption5 = Document.createElement("OPTION")
+  objOption5.Text = ".OGA"
+  objOption5.Value = ".oga"
+  dwnType.Add(objOption5)
+end sub
+
+Sub ShowImageControls
+  lblFrom.innerhtml = "Convert Picture File"
+
+  lblDeinterlace.style.visibility="hidden"
+  chkDeinterlace.style.visibility="hidden"
+
+  Set objOption3 = Document.createElement("OPTION")
+  objOption3.Text = ".JPG"
+  objOption3.Value = ".jpg"
+  dwnType.Add(objOption3)
+
+  Set objOption2 = Document.createElement("OPTION")
+  objOption2.Text = ".PNG"
+  objOption2.Value = ".png"
+  dwnType.Add(objOption2)
+
+  Set objOption5 = Document.createElement("OPTION")
+  objOption5.Text = ".TIFF"
+  objOption5.Value = ".tiff"
+  dwnType.Add(objOption5)
+
+  Set objOption1 = Document.createElement("OPTION")
+  objOption1.Text = ".BMP"
+  objOption1.Value = ".bmp"
+  dwnType.Add(objOption1)
+
+  Set objOption4 = Document.createElement("OPTION")
+  objOption4.Text = ".GIF"
+  objOption4.Value = ".gif"
+  dwnType.Add(objOption4)
+
+  Set objOption6 = Document.createElement("OPTION")
+  objOption6.Text = ".ICO"
+  objOption6.Value = ".ico"
+  dwnType.Add(objOption6)
+end sub
+
+Sub ShowVideoControls
+  lblFrom.innerhtml = "Convert Video File"
+
+  CleardwnType
+
+  Dim rdo
+  for each rdo in chkRotate
+    rdo.style.visibility="visible"
+  next
+  imgrleft.style.visibility="visible"
+  imgflip.style.visibility="visible"
+  imgfliph.style.visibility="visible"
+  imgrright.style.visibility="visible"
+  lblRotate.style.visibility="visible"
+  dwnRes.style.visibility="visible"
+  lblPixels.style.visibility="visible"
+
+  lblDeinterlace.style.visibility="visible"
+  chkDeinterlace.style.visibility="visible"
+
+  Set objOption1 = Document.createElement("OPTION")
+  objOption1.Text = ".MP4"
+  objOption1.Value = ".mp4"
+  dwnType.Add(objOption1)
+
+  Set objOption2 = Document.createElement("OPTION")
+  objOption2.Text = ".AVI"
+  objOption2.Value = ".avi"
+  dwnType.Add(objOption2)
+
+  Set objOption3 = Document.createElement("OPTION")
+  objOption3.Text = ".MOV"
+  objOption3.Value = ".mov"
+  dwnType.Add(objOption3)
+
+  Set objOption4 = Document.createElement("OPTION")
+  objOption4.Text = ".WMV"
+  objOption4.Value = ".wmv"
+  dwnType.Add(objOption4)
+
+  Set objOption5 = Document.createElement("OPTION")
+  objOption5.Text = ".MKV"
+  objOption5.Value = ".mkv"
+  dwnType.Add(objOption5)
+
+  Set objOption7 = Document.createElement("OPTION")
+  objOption7.Text = ".M2V"
+  objOption7.Value = ".m2v"
+  dwnType.Add(objOption7)
+
+  Set objOption6 = Document.createElement("OPTION")
+  objOption6.Text = ".OGG"
+  objOption6.Value = ".ogg"
+  dwnType.Add(objOption6)
+
+  Set objOption8 = Document.createElement("OPTION")
+  objOption8.Text = ".FLV"
+  objOption8.Value = ".flv"
+  dwnType.Add(objOption8)
+
+  Set objOption9 = Document.createElement("OPTION")
+  objOption9.Text = ".WAV"
+  objOption9.Value = ".wav"
+  dwnType.Add(objOption9)
+
+  Set objOption10 = Document.createElement("OPTION")
+  objOption10.Text = ".MP3"
+  objOption10.Value = ".mp3"
+  dwnType.Add(objOption10)
+end sub
+
+Sub CleardwnType
+  For Each objOption in dwnType.Options
+    objOption.RemoveNode
+  Next
+End Sub
+
+Sub btnHelp
+    Dim oShell  : Set oShell = CreateObject("WScript.Shell")
+    oShell.run "Help.html",0,True
+End Sub
+
+Sub btnStart
+  if document.getElementById("btnStart").value = "Start" then
+    document.getElementById("btnStart").value="Cancel"
+    idButton = window.setTimeout("ThreadedButton", 1, "VBScript")
+  else 'Cancel job
+    document.getElementById("btnStart").value="Start"
+    window.clearTimeout(idProcess)
+    window.clearTimeout(idProgress)
+    window.clearTimeout(idButton)
+    KillProcess(AppNameRunning)
+  end if
+End Sub
+
+sub Shutdown
+  if document.getElementById("btnStart").value = "Cancel" then
+    btnStart
+    KillProcess("mshta.exe")
+  end if
+end sub
+
+Sub ThreadedButton
+    For Each objButton in chkRotate
+      If objButton.Checked Then
+        strRadio = objButton.Value
+      End If
+    Next
+
+    strCounter = UBound(arrParam)+1 & " of " & UBound(arrParam)+1
+    if bolMergeFiles then
+      strCounter = "1 of 1"
+      if isVideo(arrParam(0)) then
+        MergeFiles arrParam(0), arrParam(1)
+      else
+        MergeFiles arrParam(1), arrParam(0)
+      end if
+    else
+      For i = 0 to UBound(arrParam)
+        if document.getElementById("btnStart").value="Cancel" then
+          lblStatus.innerhtml = "Converting... " & i + 1 & " of " & UBound(arrParam) + 1
+          NoLastName = left(arrParam(i),instrrev(arrParam(i),".")-1)
+          if lcase(strFileType) = lcase(dwnType.Value) then strAdd="-" end if
+          if lblFrom.innerhtml = "Convert Audio File" then
+          '===
+          '===AUDIO
+            strQuality = FixStrQualityAudio(dwnQuality.Value)
+            AppNameRunning = "ffmpeg.exe"
+            strCmd = "cmd /c " & chr(34) & chr(34) & AppPath & "\" & strFfmpegVer & "\bin\ffmpeg.exe" & chr(34) & _
+            " -i " & chr(34) & arrParam(i) & chr(34) & strQuality & " -y " & chr(34) & NoLastName & strAdd & dwnType.Value _
+            & chr(34) & " 1>" & chr(34) & DocPath & "\progress.txt" & chr(34) & " 2>&1" & chr(34)
+          elseif lblFrom.innerhtml = "Convert Video File" then
+          '===
+          '===VIDEO
+            AppNameRunning = "ffmpeg.exe"
+            strQuality = FixStrQualityVideo(dwnQuality.Value)
+            strRadio = FixStrRadioFfmpeg(strRadio)
+            FixStrDeinterlace
+            strCmd = "cmd /c " & chr(34) & chr(34) & AppPath & "\" & strFfmpegVer & "\bin\ffmpeg.exe" & chr(34) & _
+            " -i " & chr(34) & arrParam(i) & chr(34) & strDeinterlace & strQuality & " -y " & FixPixelsVideo & strRadio & chr(34) & NoLastName & strAdd & dwnType.Value _
+            & chr(34) & " 1>" & chr(34) & DocPath & "\progress.txt" & chr(34) & " 2>&1" & chr(34)
+          elseif lblFrom.innerhtml = "Convert Picture File" then
+          '===
+          '==IMAGE
+            strQuality = FixStrQualityImage(dwnQuality.Value)
+msgbox strRadio
+            strRadio = FixStrRadio(strRadio)
+msgbox strRadio
+            AppNameRunning = "convert.exe"
+            strMonitor = "" ' -monitor I don't use monitor since it seems to be buggy, and increases the process time considerably...
+            if dwnType.Value = ".gif" then strMonitor = "" end if 'Monitor on gifs is extremly buggy...
+            strCmd = "cmd /c " & chr(34) & chr(34) & AppPath & "\ImageMagick-6.8.9-8\convert.exe" & chr(34) & strQuality & strRadio & strMonitor & _
+            chr(34) & arrParam(i) & chr(34) & " " & FixPixelsImage & chr(34) & NoLastName & strAdd & dwnType.Value _
+            & chr(34) & " 2>" & chr(34) & DocPath & "\progress.txt" & chr(34) & chr(34)
+          end if
+
+'cmd /c ""C:\Program Files (x86)\ConvertKit\ImageMagick-6.8.9-8\convert.exe" -quality 97  -rotate 90 "Z:\Capture.JPG"  "Z:\Capture-.jpg" 2>"C:\Users\Tor\Documents\progress.txt""
+
+          'RUN APPLICATION
+          idProcess = window.setTimeout("ThreadedProcess", 1, "VBScript")
+          idProgress = window.setTimeout("ThreadedProgress", 1, "VBScript")
+          sbWait(1)
+        end if
+      Next
+    end if
+  document.getElementById("btnStart").value="Start"
+End Sub
+
+sub MergeFiles(strFile1, strFile2)
+  lblStatus.innerhtml = "Merging Files... 1 of 1"
+  NoLastName = left(strFile1,instrrev(strFile1,".")-1)
+  AppNameRunning = "ffmpeg.exe"
+  strQuality = FixStrQualityVideo(dwnQuality.Value)
+  strRadio = FixStrRadioFfmpeg(strRadio)
+  strCmd = "cmd /c " & chr(34) & chr(34) & AppPath & "\" & strFfmpegVer & "\bin\ffmpeg.exe" & chr(34) & _
+  " -i " & chr(34) & strFile1 & chr(34) & " -i " & chr(34) & strFile2 & chr(34) & strQuality & " -y " & FixPixelsVideo & strRadio & chr(34) & NoLastName & strAdd & dwnType.Value & _
+  chr(34) & " 1>" & chr(34) & DocPath & "\progress.txt" & chr(34) & " 2>&1" & chr(34)
+  'RUN APPLICATION
+  idProcess = window.setTimeout("ThreadedProcess", 1, "VBScript")
+  idProgress = window.setTimeout("ThreadedProgress", 1, "VBScript")
+  sbWait(1)
+end sub
+
+function FixPixelsVideo
+  FixPixelsVideo = " "
+  if lblPixels.innerhtml <> "Same as Input" then
+    FixPixelsVideo = "-vf scale=" & replace(replace(lblPixels.innerhtml,"x",":"),"p","")
+  end if
+end function
+
+function FixPixelsImage
+  FixPixelsImage = " "
+  if lblPixels.innerhtml <> "Same as Input" then
+    FixPixelsImage = "-resize " & lblPixels.innerhtml & " "
+  end if
+end function
+
+Sub ThreadedProcess
+  Set RunShell = CreateObject("WScript.Shell")
+  ret = RunShell.Run(strCmd,0,True)
+
+  if instr(lblStatus.innerhtml, strCounter) then
+    if ret <> 0 then
+      lblStatus.innerhtml = "Error"
+    else
+      if AppNameRunning <> "ffprobe.exe" then
+        lblStatus.innerhtml = "Ready"
+      end if
+    end if
+    window.clearTimeout(idProcess)
+    window.clearTimeout(idProgress)
+    window.clearTimeout(idButton)
+  end if
+End Sub
+
+Sub ThreadedProgress
+  on error resume next
+  Set objFSO = CreateObject("Scripting.FileSystemObject")
+  Set objFile = objFSO.OpenTextFile(DocPath & "\progress.txt", 1)
+
+  sbWait2(2)
+
+  strText = objFile.ReadAll
+  temp = lblStatus.innerhtml
+
+  if AppNameRunning = "ffmpeg.exe" then
+    Start = instr(strText,"Duration: ")+10
+    EncodingTime = TimeToSec(mid(strText,Start,8))
+    while(isProcess(AppNameRunning))
+      sbWait2(2)
+      strText = objFile.ReadAll
+      Start = instr(strText,"kB time=")+8
+      CurrTime = TimeToSec(mid(strText,Start,8))
+      Procent = CurrTime / EncodingTime * 100
+      lblStatus.innerhtml = temp & " - " & cint(Procent) & "%"
+    wend
+  elseif AppNameRunning = "ffprobe.exe" then
+    while(isProcess(AppNameRunning))
+      sbWait2(2)
+    wend
+    strResolution = strText
+  else
+    while(isProcess(AppNameRunning))
+      sbWait2(2)
+      strText = objFile.ReadAll
+      Start = instrrev(strText,", ")+2
+      Procent = mid(StrText,Start,2)
+      lblStatus.innerhtml = temp & " - " & cint(Procent) & "%"
+    wend
+  end if
+End Sub
+
+Function TimeToSec(Secs)
+  arrTime = Split(Secs,":")
+  Hours = cint(arrTime(0)) *60*60
+  Minutes = cint(arrTime(1)) *60
+  Seconds = cint(left(arrTime(2),2))
+  TimeToSec = Hours + Minutes + Seconds
+End Function
+
+Sub Wait(Time)
+  Dim wmiQuery, objWMIService, objPing, objStatus
+  wmiQuery = "Select * From Win32_PingStatus Where Address = '1.1.1.1' AND Timeout = " & Time
+  Set objWMIService = GetObject("winmgmts:\\.\root\cimv2")
+  Set objPing = objWMIService.ExecQuery(wmiQuery)
+  For Each objStatus in objPing
+    If IsNull(objStatus.StatusCode) Or objStatus.Statuscode<>0 Then
+      Reachable = False 'if computer is unreacable, return false
+    Else
+      Reachable = True 'if computer is reachable, return true
+    End If
+  Next
+End Sub
+
+Sub sbWait(Seconds)
+    Dim oShell  : Set oShell = CreateObject("WScript.Shell")
+    oShell.run "cmd /c ping localhost -n " & Seconds,0,True
+End Sub
+
+Sub sbWait2(Seconds)
+    Dim oShell  : Set oShell = CreateObject("WScript.Shell")
+    oShell.run "cmd /c ping localhost -n " & Seconds,0,True
+End Sub
+
+Function isProcess(AppName)
+  isProcess = false
+  Const strComputer = "."
+  Dim objWMIService, colProcessList
+  Set objWMIService = GetObject("winmgmts:" & "{impersonationLevel=impersonate}!\\" & strComputer & "\root\cimv2")
+  Set colProcessList = objWMIService.ExecQuery("SELECT * FROM Win32_Process WHERE Name = '" & AppName & "'")
+  For Each objProcess in colProcessList
+    isProcess = true
+  Next
+end function
+
+Sub KillProcess(AppName)
+  Const strComputer = "."
+  Dim objWMIService, colProcessList
+  Set objWMIService = GetObject("winmgmts:" & "{impersonationLevel=impersonate}!\\" & strComputer & "\root\cimv2")
+  Set colProcessList = objWMIService.ExecQuery("SELECT * FROM Win32_Process WHERE Name = '" & AppName & "'")
+  For Each objProcess in colProcessList
+    objProcess.Terminate()
+  Next
+end sub
+
+
+function FixStrQualityAudio(strQuality)
+  if dwnType.Value = ".wav" then
+    Select Case strQuality
+    Case "1"
+      FixStrQualityAudio = " -acodec pcm_s16le -ac 2 "
+    Case "3"
+      FixStrQualityAudio = " -acodec pcm_s16le -ac 2 -ar 44100 "
+    Case "5"
+      FixStrQualityAudio = " -acodec pcm_s16le -ac 2 -ar 22050 "
+    Case "9"
+      FixStrQualityAudio = " -acodec pcm_s16le -ac 2 -ar 22050 "
+    Case "15"
+      FixStrQualityAudio = " -acodec pcm_s16le -ac 2 -ar 11025 "
+    End Select
+  elseif dwnType.Value = ".flac" then
+    Select Case strQuality
+    Case "1"
+      FixStrQualityAudio = " -acodec flac -compression_level 12 "
+    Case "3"
+      FixStrQualityAudio = " -acodec flac -compression_level 12 -lpc_type 3 -lpc_passes 2 "
+    Case "5"
+      FixStrQualityAudio = " -acodec flac -compression_level 12 -lpc_type 3 -lpc_passes 5 "
+    Case "9"
+      FixStrQualityAudio = " -acodec flac -compression_level 12 -lpc_type 3 -lpc_passes 9 "
+    Case "15"
+      FixStrQualityAudio = " -acodec flac -compression_level 12 -lpc_type 3 -lpc_passes 10 "
+    End Select
+  else
+    Select Case strQuality
+    Case "1"
+      FixStrQualityAudio = " -b:a 320k "
+    Case "3"
+      FixStrQualityAudio = " -b:a 192k "
+    Case "5"
+      FixStrQualityAudio = " -b:a 160k "
+    Case "9"
+      FixStrQualityAudio = " -q:a 0 "
+    Case "15"
+      FixStrQualityAudio = " -q:a 1 "
+    End Select
+  end if
+end function
+
+function FixStrQualityVideo(strQuality)
+  if dwnType.Value = ".wav" then
+    Select Case strQuality
+    Case "1"
+      FixStrQualityVideo = " -acodec pcm_s16le -ac 2 "
+    Case "3"
+      FixStrQualityVideo = " -acodec pcm_s16le -ac 2 -ar 44100 "
+    Case "5"
+      FixStrQualityVideo = " -acodec pcm_s16le -ac 2 -ar 22050 "
+    Case "9"
+      FixStrQualityVideo = " -acodec pcm_s16le -ac 2 -ar 22050 "
+    Case "15"
+      FixStrQualityVideo = " -acodec pcm_s16le -ac 2 -ar 11025 "
+    End Select
+  elseif dwnType.Value = ".mp3" then
+    Select Case strQuality
+    Case "1"
+      FixStrQualityVideo = " -b:a 320k "
+    Case "3"
+      FixStrQualityVideo = " -b:a 192k "
+    Case "5"
+      FixStrQualityVideo = " -b:a 160k "
+    Case "9"
+      FixStrQualityVideo = " -q:a 0 "
+    Case "15"
+      FixStrQualityVideo = " -q:a 1 "
+    End Select
+  elseif dwnType.Value = ".flv" then
+    Select Case strQuality
+    Case "1"
+      FixStrQualityVideo = " -ar 44100 -ab 256k -f flv "
+    Case "3"
+      FixStrQualityVideo = " -ar 44100 -ab 128k -f flv "
+    Case "5"
+      FixStrQualityVideo = " -ar 22050 -ab 64k -f flv "
+    Case "9"
+      FixStrQualityVideo = " -ar 22050 -ab 32k -f flv "
+    Case "15"
+      FixStrQualityVideo = " -ar 22050 -ab 12.2k -f flv "
+    End Select
+  elseif dwnType.Value = ".ogg" then
+    Select Case strQuality
+    Case "1"
+      FixStrQualityVideo = " -c:v libtheora -c:a libvorbis -q:v 10 -q:a 10 "
+    Case "3"
+      FixStrQualityVideo = " -c:v libtheora -c:a libvorbis -q:v 7 -q:a 6 "
+    Case "5"
+      FixStrQualityVideo = " -c:v libtheora -c:a libvorbis -q:v 6 -q:a 5 "
+    Case "9"
+      FixStrQualityVideo = " -c:v libtheora -c:a libvorbis -q:v 5 -q:a 3 "
+    Case "15"
+      FixStrQualityVideo = " -c:v libtheora -c:a libvorbis -q:v 2 -q:a 2 "
+    End Select
+  else
+    Select Case strQuality
+    Case "1"
+      FixStrQualityVideo = " -c:v libx264 -crf 23 -maxrate 4M -bufsize 8M -c:a aac -b:a 512k "
+    Case "3"
+      FixStrQualityVideo = " -c:v libx264 -crf 21 -maxrate 2M -bufsize 4M -c:a aac -b:a 256k "
+    Case "5"
+      FixStrQualityVideo = " -c:v libx264 -crf 19 -maxrate 1M -bufsize 2M -c:a aac -b:a 190k "
+    Case "9"
+      FixStrQualityVideo = " -c:v libx264 -crf 17 -maxrate 500k -bufsize 1M -c:a aac -b:a 160k "
+    Case "15"
+      if dwnType.Value = ".avi" or dwnType.Value = ".wmv" or dwnType.Value = ".m2v" then
+        FixStrQualityVideo = " -c:v h264 -b:v 200k -b:a 128k "
+      else
+        FixStrQualityVideo = " -c:v libx264 -crf 15 -maxrate 256k -bufsize 500k -c:a aac -b:a 128k "
+      end if
+    End Select
+  end if
+end function
+
+function FixStrQualityImage(strQuality)
+  Select Case strQuality
+  Case "1"
+    FixStrQualityImage = " -quality 99 "
+  Case "3"
+    FixStrQualityImage = " -quality 97 "
+  Case "5"
+    FixStrQualityImage = " -quality 96 "
+  Case "9"
+    FixStrQualityImage = " -quality 90 "
+  Case "15"
+    FixStrQualityImage = " -quality 85 "
+  Case Else
+    FixStrQualityImage = strQuality
+  End Select
+end function
+
+function FixStrRadioFfmpeg(strRadio)
+  Select Case strRadio
+  Case "0"
+    FixStrRadioFfmpeg = " "
+  Case "5"
+    FixStrRadioFfmpeg = "-vf transpose=2 "
+  Case "1"
+    FixStrRadioFfmpeg = "-vf transpose=1,transpose=0 "
+  Case "2"
+    FixStrRadioFfmpeg = "-vf transpose=1,transpose=3 "
+  Case "4"
+    FixStrRadioFfmpeg = "-vf transpose=1 "
+  Case Else
+    FixStrRadioFfmpeg = strRadio
+  End Select
+end function
+
+function FixStrDeinterlace()
+  if (chkDeinterlace.Checked = True) then
+    strDeinterlace = " -vf yadif"
+  else
+    strDeinterlace = ""
+  end if
+end function
+
+function FixStrRadio(strRadio)
+  Select Case strRadio
+  Case "0"
+    FixStrRadio = " "
+  Case "5"
+    FixStrRadio = " -rotate 270 "
+  Case "1"
+    FixStrRadio = " -flip "
+  Case "2"
+    FixStrRadio = " -flop "
+  Case "4"
+    FixStrRadio = " -rotate 90 "
+  Case Else
+    FixStrRadio = strRadio
+  End Select
+end function
+
+function convToArray(strParam)
+  arrParams = Split(strParam,":")
+  Const removalIndex = 0
+  For x=removalIndex To UBound(arrParams)-1
+    arrParams(x) = strDrive & ":" & arrParams(x + 1)
+  Next
+  ReDim Preserve arrParams(UBound(arrParams) - 1)
+
+  For i = 0 to UBound(arrParams)
+    if instr(Right(arrParams(i),2), " ") <> 0 then
+      arrParams(i) = Left(arrParams(i),Len(arrParams(i))-2)
+    end if
+  Next
+  convToArray = arrParams
+end function
+
+sub setPixels
+  For Each objOption in dwnRes.Options
+    If objOption.Selected Then
+      if objOption.Value = 8 then
+        temp = InputBox("Input pixels manually." & vbnewline & "Example:" & vbnewline & "1920x1080", "Enter Pixels Manually")
+      else
+        temp = objOption.InnerText
+      end if
+    End If
+  Next
+  if temp <> "" then
+    lblPixels.innerhtml = temp
+  end if
+  calcSize
+end sub
+
+sub calcSize
+  if lblPixels.innerhtml <> "Same as Input" then
+    if strResolution <> "" then
+      orgSize = Split(strResolution,"x")
+      orgSize2 = cint(orgSize(0))*cint(orgSize(1))
+      newSize = replace(lblPixels.innerhtml,"p","")
+      newSize = Split(newSize,"x")
+      newSize2 = cint(newSize(0))*cint(newSize(1))
+      reduction=100/orgSize2*newSize2/100
+      reduction = Round(reduction, 1)
+      if reduction <> 1 then
+        reduction = reduction+((1-reduction)/3)+((1-reduction)/3)
+      end if
+    end if
+  else
+    reduction = 1
+  end if
+
+  if dwnType.Value = ".mp4" then
+    Select Case dwnQuality.Value
+      Case 1
+        bitrate = 4096+512
+        bitrate = bitrate*0.80
+      Case 3
+        bitrate = 2048+256
+        bitrate = bitrate*1.2
+      Case 5
+        bitrate = 1024+190
+        bitrate = bitrate*1.2
+      Case 9
+        bitrate = 512+160
+        bitrate = bitrate*1.2
+      Case 15
+        bitrate = 256+128
+        bitrate = bitrate*1.3
+    End Select
+    caSize = TimeToSec(strMediaDuration)
+    caSize = caSize * bitrate * 100 * reduction
+    lblStatus.innerhtml = "Output filesize about " & FormatFileSize(caSize)
+  else
+    lblStatus.innerhtml = "Ready"
+  end if
+end sub
+
+Public Function FormatFileSize(lngFileSize)
+  Dim x
+x = 0
+  Dim Suffix
+Suffix = ""
+  Dim Result
+Result = lngFileSize
+
+  Do Until Int(Result) < 1000
+     x = x + 1
+     Result = Result / 1024
+  Loop
+
+  Result = Round(Result, 2)
+
+  Select Case x
+         Case 0
+              Suffix = "Bytes"
+         Case 1 'KiloBytes
+              Suffix = "KB"
+         Case 2 'MegaBytes
+              Suffix = "MB"
+         Case 3 'GigaBytes
+              Suffix = "GB"
+         Case 4 'TeraBytes
+              Suffix = "TB"
+         Case 5 'PetaBytes
+              Suffix = "PB"
+         Case 6 'ExaBytes
+              Suffix = "EB"
+         Case 7 'ZettaBytes
+              Suffix = "ZB"
+         Case 8 'YottaBytes
+              Suffix = "YB"
+         Case Else
+              Suffix = "Too big to compute :)"
+  End Select
+
+  FormatFileSize = Result & " " & Suffix
+
+End Function
+
+</script>
+
+<body onbeforeunload=Shutdown>
+<div id="lblFrom" style="{ position: absolute; left: 10; top: 5;}">InputFileName</div><BR>
+<Span id="lblTo">To 
+<select size="1" name="dwnType" style="width:170" onchange="calcSize">
+</select>
+<select size="1" name="dwnQuality" onchange="calcSize">
+  <option value="1">"Lossless"</option>
+  <option value="3" SELECTED>Very High</option>
+  <option value="5">High</option>
+  <option value="9">Medium</option>
+  <option value="15">Low</option>
+</select>
+<input type="button" value="Start" name="btnStart" onClick="btnStart" style="width:70px">
+</span>
+<Span style="line-height:5px">&nbsp;</span><BR>
+&nbsp;&nbsp;&nbsp;<big>&nbsp;</big>
+<select size="1" name="dwnRes" style="width:170" onchange="setPixels">
+  <option value="1" SELECTED>Same as Input</option>
+  <option value="2">1920x1200</option>
+  <option value="3">1920x1080p</option>
+  <option value="4">1280x800</option>
+  <option value="5">1280x720p</option>
+  <option value="6">800x600</option>
+  <option value="7">640x480</option>
+  <option value="8">Enter Manually</option>
+</select>
+<Span id="lblPixels" disabled>Same as Input</span>
+<BR>
+<Span style="line-height:7px">&nbsp;</span><BR>
+</big><input type="radio" name="chkRotate" value="0" CHECKED><span id="lblRotate">No rotation</span><br>
+</big><input type="radio" name="chkRotate" value="5"><input type="image" name="imgrleft" height="19" width="19" src="rl.png" style="cursor:normal">
+<input type="radio" name="chkRotate" value="1"><input type="image" name="imgflip" height="19" width="19" src="fv.png"  style="cursor:normal">
+<input type="radio" name="chkRotate" value="2"><input type="image" name="imgfliph" height="19" width="19" src="fh.png" style="cursor:normal">
+<input type="radio" name="chkRotate" value="4"><input type="image" name="imgrright" height="19" width="19" src="rr.png" style="cursor:normal">
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<input type="checkbox" name="chkDeinterlace" value="6"><span id="lblDeinterlace">DeInterlace</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+<input type="image" name="imghelp" height="19" width="19" src="Help.png" onClick="btnHelp">
+<br>
+<Span style="line-height:7px">&nbsp;</span><BR>
+<span id="lblStatus">Ready</span>
+</body>
+</html>
+
+
+
+
+
+
+
+
