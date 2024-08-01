@@ -115,10 +115,11 @@ sub getResolution
   strResolution = intHeight & "x" & intWidth
   if strResolution = "x" then
     strCmd = "cmd /c " & chr(34) & chr(34) & AppPath & "\" & strFfmpegVer & "\bin\ffprobe.exe" & chr(34) & _
-    " -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 " & chr(34) & arrParam(0) & _
+    " -v error -select_streams v:0 -show_entries stream=width,height,duration:stream_tags=duration -of csv=s=x:p=0 " & chr(34) & arrParam(0) & _
     chr(34) & " 1>" & chr(34) & DocPath & "\progress.txt" & chr(34) & " 2>&1" & chr(34)
     AppNameRunning = "ffprobe.exe"
     'RUN APPLICATION
+
     idProcess = window.setTimeout("ThreadedProcess", 1, "VBScript")
     idProgress = window.setTimeout("ThreadedProgress", 1, "VBScript")
     sbWait(1)
@@ -229,6 +230,8 @@ function isImage(strFileType2)
   Case ".ico"
     isImage = true
   Case ".psd"
+    isImage = true
+  Case ".pdf"
     isImage = true
   End Select
 end function
@@ -452,24 +455,31 @@ Sub ThreadedButton
             strRadio = FixStrRadioFfmpeg(strRadio)
             FixStrDeinterlace
             strCmd = "cmd /c " & chr(34) & chr(34) & AppPath & "\" & strFfmpegVer & "\bin\ffmpeg.exe" & chr(34) & _
-            " -i " & chr(34) & arrParam(i) & chr(34) & strDeinterlace & strQuality & " -y " & FixPixelsVideo & strRadio & chr(34) & NoLastName & strAdd & dwnType.Value _
+            " -i " & chr(34) & arrParam(i) & chr(34) & strDeinterlace & " -filter:v fps=30 " & strQuality & " -y " & FixPixelsVideo & strRadio & chr(34) & NoLastName & strAdd & dwnType.Value _
             & chr(34) & " 1>" & chr(34) & DocPath & "\progress.txt" & chr(34) & " 2>&1" & chr(34)
           elseif lblFrom.innerhtml = "Convert Picture File" then
           '===
           '==IMAGE
             strQuality = FixStrQualityImage(dwnQuality.Value)
-msgbox strRadio
             strRadio = FixStrRadio(strRadio)
-msgbox strRadio
-            AppNameRunning = "convert.exe"
-            strMonitor = "" ' -monitor I don't use monitor since it seems to be buggy, and increases the process time considerably...
+
+            AppNameRunning = "magick.exe"
+            strMonitor = " -monitor " ' -monitor I don't use monitor since it seems to be buggy, and increases the process time considerably...
             if dwnType.Value = ".gif" then strMonitor = "" end if 'Monitor on gifs is extremly buggy...
-            strCmd = "cmd /c " & chr(34) & chr(34) & AppPath & "\ImageMagick-6.8.9-8\convert.exe" & chr(34) & strQuality & strRadio & strMonitor & _
-            chr(34) & arrParam(i) & chr(34) & " " & FixPixelsImage & chr(34) & NoLastName & strAdd & dwnType.Value _
+            strAlpha = ""
+            strDensity = ""
+            if lcase(strFileType) = ".pdf" then
+              strAlpha = " -alpha remove"
+              strDensity = " -density 196"
+            end if
+            strCmd = "cmd /c " & chr(34) & chr(34) & AppPath & "\ImageMagick-7.1.1-33\magick.exe" & chr(34) & strDensity & strQuality & strRadio & strMonitor & _
+            chr(34) & arrParam(i) & chr(34) & strAlpha & " " & FixPixelsImage & chr(34) & NoLastName & strAdd & dwnType.Value _
             & chr(34) & " 2>" & chr(34) & DocPath & "\progress.txt" & chr(34) & chr(34)
           end if
 
-'cmd /c ""C:\Program Files (x86)\ConvertKit\ImageMagick-6.8.9-8\convert.exe" -quality 97  -rotate 90 "Z:\Capture.JPG"  "Z:\Capture-.jpg" 2>"C:\Users\Tor\Documents\progress.txt""
+msgbox strCmd
+'....\magick.exe" -density 196 -quality 99 "E:\Backup\retrygd.pdf" -alpha remove "E:\Backup\retrygd.png"
+'cmd /c ""C:\Program Files (x86)\ConvertKit\ImageMagick-7.1.1-33\convert.exe" -quality 97  -rotate 90 "Z:\Capture.JPG"  "Z:\Capture-.jpg" 2>"C:\Users\Tor\Documents\progress.txt""
 
           'RUN APPLICATION
           idProcess = window.setTimeout("ThreadedProcess", 1, "VBScript")
@@ -553,7 +563,14 @@ Sub ThreadedProgress
     while(isProcess(AppNameRunning))
       sbWait2(2)
     wend
-    strResolution = strText
+    strText = objFile.ReadAll
+'msgbox strText
+    strText = Replace(strText,vbNewLine,"x")
+    strText = Replace(strText,"xN/A","")
+    strText = Replace(strText,"N/Ax","")
+    arrMyRes = Split(strText, "x")
+    strResolution = arrMyRes(0) & "x" & arrMyRes(1)
+    strMediaDuration = arrMyRes(2)
   else
     while(isProcess(AppNameRunning))
       sbWait2(2)
@@ -563,14 +580,21 @@ Sub ThreadedProgress
       lblStatus.innerhtml = temp & " - " & cint(Procent) & "%"
     wend
   end if
+  calcSize
 End Sub
 
 Function TimeToSec(Secs)
-  arrTime = Split(Secs,":")
-  Hours = cint(arrTime(0)) *60*60
-  Minutes = cint(arrTime(1)) *60
-  Seconds = cint(left(arrTime(2),2))
-  TimeToSec = Hours + Minutes + Seconds
+on error resume next
+  if instr(Secs, ":") then
+    arrTime = Split(Secs,":")
+    Hours = cint(arrTime(0)) *60*60
+    Minutes = cint(arrTime(1)) *60
+    Seconds = cint(left(arrTime(2),2))
+    TimeToSec = Hours + Minutes + Seconds
+  else
+    arrTime = Split(Secs,".")
+    TimeToSec = arrTime(0)
+  end if
 End Function
 
 Sub Wait(Time)
@@ -718,20 +742,17 @@ function FixStrQualityVideo(strQuality)
   else
     Select Case strQuality
     Case "1"
-      FixStrQualityVideo = " -c:v libx264 -crf 23 -maxrate 4M -bufsize 8M -c:a aac -b:a 512k "
+      FixStrQualityVideo = " -c:v libx264 -x264-params ||nal-hrd=cbr|| -b:v 6M -minrate 3M -maxrate 6M -bufsize 12M -c:a aac -b:a 512k "
     Case "3"
-      FixStrQualityVideo = " -c:v libx264 -crf 21 -maxrate 2M -bufsize 4M -c:a aac -b:a 256k "
+      FixStrQualityVideo = " -c:v libx264 -x264-params ||nal-hrd=cbr|| -b:v 4M -minrate 2M -maxrate 4M -bufsize 8M -c:a aac -b:a 256k "
     Case "5"
-      FixStrQualityVideo = " -c:v libx264 -crf 19 -maxrate 1M -bufsize 2M -c:a aac -b:a 190k "
+      FixStrQualityVideo = " -c:v libx264 -x264-params ||nal-hrd=cbr|| -b:v 2M -minrate 1M -maxrate 2M -bufsize 4M -c:a aac -b:a 190k "
     Case "9"
-      FixStrQualityVideo = " -c:v libx264 -crf 17 -maxrate 500k -bufsize 1M -c:a aac -b:a 160k "
+      FixStrQualityVideo = " -c:v libx264 -x264-params ||nal-hrd=cbr|| -b:v 1M -minrate 1M -maxrate 1M -bufsize 2M -c:a aac -b:a 160k "
     Case "15"
-      if dwnType.Value = ".avi" or dwnType.Value = ".wmv" or dwnType.Value = ".m2v" then
-        FixStrQualityVideo = " -c:v h264 -b:v 200k -b:a 128k "
-      else
-        FixStrQualityVideo = " -c:v libx264 -crf 15 -maxrate 256k -bufsize 500k -c:a aac -b:a 128k "
-      end if
+      FixStrQualityVideo = " -c:v libx264 -x264-params ||nal-hrd=cbr|| -b:v 0.5M -minrate 0.5M -maxrate 0.5M -bufsize 2M -c:a aac -b:a 128k "
     End Select
+    FixStrQualityVideo = replace(FixStrQualityVideo,"||", chr(34))
   end if
 end function
 
@@ -848,18 +869,18 @@ sub calcSize
     Select Case dwnQuality.Value
       Case 1
         bitrate = 4096+512
-        bitrate = bitrate*0.80
+        bitrate = bitrate*1.7
       Case 3
-        bitrate = 2048+256
-        bitrate = bitrate*1.2
+        bitrate = 4096+256
+        bitrate = bitrate*1.21
       Case 5
-        bitrate = 1024+190
-        bitrate = bitrate*1.2
+        bitrate = 2048+190
+        bitrate = bitrate*1.19
       Case 9
-        bitrate = 512+160
+        bitrate = 1024+160
         bitrate = bitrate*1.2
       Case 15
-        bitrate = 256+128
+        bitrate = 512+128
         bitrate = bitrate*1.3
     End Select
     caSize = TimeToSec(strMediaDuration)
@@ -869,6 +890,12 @@ sub calcSize
     lblStatus.innerhtml = "Ready"
   end if
 end sub
+
+'      FixStrQualityVideo = " -c:v libx264 -x264-params ||nal-hrd=cbr|| -b:v 6M -minrate 3M -maxrate 6M -bufsize 12M -c:a aac -b:a 512k "
+'      FixStrQualityVideo = " -c:v libx264 -x264-params ||nal-hrd=cbr|| -b:v 5M -minrate 2M -maxrate 5M -bufsize 10M -c:a aac -b:a 512k "
+'      FixStrQualityVideo = " -c:v libx264 -x264-params ||nal-hrd=cbr|| -b:v 4M -minrate 2M -maxrate 4M -bufsize 8M -c:a aac -b:a 512k "
+'      FixStrQualityVideo = " -c:v libx264 -x264-params ||nal-hrd=cbr|| -b:v 2M -minrate 1M -maxrate 2M -bufsize 4M -c:a aac -b:a 512k "
+'      FixStrQualityVideo = " -c:v libx264 -x264-params ||nal-hrd=cbr|| -b:v 1M -minrate 0.5M -maxrate 1M -bufsize 2M -c:a aac -b:a 512k "
 
 Public Function FormatFileSize(lngFileSize)
   Dim x
@@ -905,7 +932,7 @@ Result = lngFileSize
          Case 8 'YottaBytes
               Suffix = "YB"
          Case Else
-              Suffix = "Too big to compute :)"
+              Suffix = "Too big"
   End Select
 
   FormatFileSize = Result & " " & Suffix
